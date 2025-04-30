@@ -1,0 +1,8 @@
+streamlit
+requests
+pandas
+altair
+beautifulsoup4
+feedparser
+scikit-learn
+schedule
