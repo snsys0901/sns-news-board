@@ -299,7 +299,7 @@ def main() -> None:
 
     if st.sidebar.button("🔄 새로고침"):
         st.cache_data.clear()
-        st.experimental_rerun()
+        st.rerun()
 
     # ─ 탭별 뉴스 ─
     tabs=st.tabs(list(QUERIES.keys()))
