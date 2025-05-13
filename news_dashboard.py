@@ -2,6 +2,7 @@
 """
 에스엔시스 뉴스 대시보드 (모던 UI/UX)
 * 기본 테마: 라이트 모드 강제 적용
+* 업체별 최신 뉴스 대시보드 아래에 제품별 최신 뉴스 대시보드 추가
 * 제목+내용 기반 전처리 키워드 강화: TF–IDF + 빈도 백업
 * 네이버 스크랩(li.bx + div.news_area) + RSS/NewsAPI 지원
 * parse_datetime 네이밍 통일 및 위치 수정
@@ -82,15 +83,24 @@ logger = logging.getLogger("NewsBoard")
 # ------------------------------------------------------
 # 전역 설정
 # ------------------------------------------------------
-CACHE_FILE    = Path.home() / ".news_cache.json"
-FIXED_QUERIES = {
+CACHE_FILE      = Path.home() / ".news_cache.json"
+FIXED_QUERIES   = {
     "에스엔시스": "에스엔시스 OR S&SYS",
     "삼성중공업": "삼성중공업",
     "한화오션":   "한화오션",
 }
-FIXED_KEYWORDS = {k: [k] for k in FIXED_QUERIES}
-NOISE_WORDS   = {"rss", "news", "google", "https", "http", "com", "href", "color", "nbsp"}
-NEWS_API_KEY   = os.getenv("NEWS_API_KEY", "")
+FIXED_KEYWORDS  = {k: [k] for k in FIXED_QUERIES}
+NOISE_WORDS     = {"rss", "news", "google", "https", "http", "com", "href", "color", "nbsp"}
+NEWS_API_KEY    = os.getenv("NEWS_API_KEY", "")
+
+# ------------------------------------------------------
+# 제품별 검색 설정
+# ------------------------------------------------------
+PRODUCT_QUERIES = [
+    ("BWMS", ["BWMS", "BWTS", "선박평형수"]),
+    ("IAS",  ["IAS",  "ICMS", "설비제어시스템"]),
+    ("FGSS", ["FGSS", "LFSS", "선박이중연료시스템"]),
+]
 
 # ------------------------------------------------------
 # 유틸 함수
@@ -321,11 +331,11 @@ def main():
 
     st.markdown("---")
 
-    # 뉴스 탭
+    # 업체별 최신 뉴스 탭
     tabs = st.tabs(list(all_data.keys()))
     for tab, comp in zip(tabs, all_data):
         with tab:
-            st.subheader(f" {comp} 최신 뉴스 (상위 {cnt}건)")
+            st.subheader(f"{comp} 최신 뉴스 (상위 {cnt}건)")
             subset = sorted(
                 all_data[comp],
                 key=lambda x: parse_datetime(x["publishedAt"]) or datetime.min,
@@ -334,6 +344,31 @@ def main():
             if not subset:
                 st.info("현재 조회할 기사가 없습니다.")
             for a in subset:
+                ts = parse_datetime(a["publishedAt"])
+                ts_str = ts.strftime("%Y-%m-%d %H:%M") if ts else ""
+                st.markdown(
+                    f"- [{_shorten(a['title'])}]({a['url']}) "
+                    f"<span style='color:#6B7280;'>({ts_str})</span>",
+                    unsafe_allow_html=True
+                )
+
+    st.markdown("---")
+
+    # ➊ 제품별 최신 뉴스 탭
+    st.subheader("제품별 최신 뉴스")
+    prod_tabs = st.tabs([title for title, _ in PRODUCT_QUERIES])
+    for tab, (title, synonyms) in zip(prod_tabs, PRODUCT_QUERIES):
+        with tab:
+            st.subheader(f"{title} 최신 뉴스 (상위 {cnt}건)")
+            query = " OR ".join(synonyms)
+            arts = sorted(
+                fetch_all(query, mode, use_nv),
+                key=lambda x: parse_datetime(x.get("publishedAt", "")) or datetime.min,
+                reverse=True
+            )[:cnt]
+            if not arts:
+                st.info("현재 조회할 기사가 없습니다.")
+            for a in arts:
                 ts = parse_datetime(a["publishedAt"])
                 ts_str = ts.strftime("%Y-%m-%d %H:%M") if ts else ""
                 st.markdown(
@@ -374,6 +409,7 @@ def main():
         tooltip=['date_fmt', 'company', 'count'],
     ).properties(width='container', height=400)
     st.altair_chart(chart, use_container_width=True)
+
 
 if __name__ == '__main__':
     main()
