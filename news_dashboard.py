@@ -2,7 +2,7 @@
 """
 에스엔시스 뉴스 대시보드 (모던 UI/UX)
 * 기본 테마: 라이트 모드 강제 적용
-* 업체별 최신 뉴스➕제품별 최신 뉴스➕기업/제품별 주요 키워드 분석 (TF–IDF 전용)
+* 업체별 최신 뉴스➕제품별 최신 뉴스➕기업/제품별 주요 키워드 분석 (한글 TF–IDF 전용)
 * 네이버 스크랩 + RSS/NewsAPI 지원
 * parse_datetime 네이밍 통일 및 위치 수정
 * 모던 테마: 커스텀 CSS, Metrics, Expander, Line 차트
@@ -54,8 +54,10 @@ st.markdown("""
     header { background-color: #2C3E50 !important; }
     header .css-1v3fvcr h1 { color: #FFFFFF !important; }
     .css-1d391kg { background-color: #FFFFFF; border-right: 1px solid #E1E4E8; }
-    .stMetric { background-color: #FFFFFF; border: 1px solid #E1E4E8; border-radius: 8px; padding: 1rem; }
-    .stExpander { background-color: #FFFFFF; border-radius: 8px; margin-bottom: 1rem; }
+    .stMetric { background-color: #FFFFFF; border: 1px solid #E1E4E8; 
+                border-radius: 8px; padding: 1rem; }
+    .stExpander { background-color: #FFFFFF; border-radius: 8px; 
+                  margin-bottom: 1rem; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -78,15 +80,20 @@ FIXED_QUERIES = {
     "삼성중공업": "삼성중공업",
     "한화오션":   "한화오션",
 }
-NOISE_WORDS   = {"rss", "news", "google", "https", "http", "com", "href", "color", "nbsp"}
+NOISE_WORDS   = set()  # 한글 전용이기에 기본 노이즈는 비워둡니다.
 NEWS_API_KEY  = os.getenv("NEWS_API_KEY", "")
 
 # ------------------------------------------------------
-# 제품별 검색 설정
+# 제품별 검색 설정 (IAS 부분만 수정)
 # ------------------------------------------------------
 PRODUCT_QUERIES = [
     ("BWMS", ["BWMS", "BWTS", "선박평형수"]),
-    ("IAS",  ["IAS",  "ICMS", "설비제어시스템"]),
+    ("IAS", [
+        "선박용 제어시스템",
+        "선박 제어시스템",
+        "콩스버그",
+        "선박용 IAS"
+    ]),
     ("FGSS", ["FGSS", "LFSS", "선박이중연료시스템"]),
 ]
 
@@ -101,8 +108,10 @@ def parse_datetime(s: str) -> Optional[datetime]:
     s = s.strip()
     for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%SZ",
                 "%Y-%m-%d", "%a, %d %b %Y %H:%M:%S %z"):
-        try: return datetime.strptime(s, fmt)
-        except ValueError: pass
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            continue
     if m := re.match(r"(\d+)시간 전", s):
         return datetime.now() - timedelta(hours=int(m.group(1)))
     if m := re.match(r"(\d+)분 전", s):
@@ -110,42 +119,51 @@ def parse_datetime(s: str) -> Optional[datetime]:
     return None
 
 def clean_text(text: str) -> str:
+    # 링크, 특수문자 제거. 한글+영문 유지
     text = re.sub(r"http\S+", "", text)
     text = re.sub(r"[^가-힣A-Za-z\s]", " ", text)
     return re.sub(r"\s+", " ", text).strip()
 
 def extract_top_keywords(docs: List[str], top_n: int = 5) -> List[str]:
-    """TF–IDF 점수 합계를 기준으로 상위 n개 n-gram 추출"""
-    texts = [clean_text(d).lower() for d in docs if d.strip()]
+    """
+    한글 토큰(n-gram 1~2)만 대상으로 TF–IDF를 계산하여
+    상위 top_n개의 키워드 추출 (조사 제거 포함).
+    """
+    texts = [clean_text(d) for d in docs if d.strip()]
     if not texts:
         return []
-    # 한글+영문 단어 2자 이상, 1~2그램, max_features 충분히 크게
+    # 한글만 추출하는 token_pattern
     vect = TfidfVectorizer(
-        token_pattern=r"(?u)\b[가-힣A-Za-z]{2,}\b",
+        token_pattern=r"(?u)\b[가-힣]{2,}\b",
         ngram_range=(1,2),
         max_features=200
     )
     X = vect.fit_transform(texts)
     scores = X.sum(axis=0).A1
     terms = vect.get_feature_names_out()
-    # NOISE_WORDS 제거
-    filtered = [
-        (terms[i], scores[i]) for i in scores.argsort()[::-1]
-        if terms[i] not in NOISE_WORDS
-    ]
-    top_terms = [t for t,_ in filtered[:top_n]]
-    return top_terms
+    # 조사 제거용 정규식
+    josa = re.compile(r"(으로|로|와|과|이|가|은|는|도)$")
+    filtered = []
+    for term, score in sorted(zip(terms, scores), key=lambda x: -x[1]):
+        clean_term = josa.sub("", term)
+        if len(clean_term) >= 2 and clean_term not in NOISE_WORDS:
+            filtered.append(clean_term)
+        if len(filtered) >= top_n:
+            break
+    return filtered
 
-# 이하 fetch_*, update_cache, analyze_trends 등은 이전과 동일
 @st.cache_data(ttl=3600)
 def fetch_newsapi(q: str) -> List[Dict]:
     if not NEWS_API_KEY:
         return []
     since = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    params = dict(q=q, language="ko", sortBy="publishedAt",
-                  from_=since, apiKey=NEWS_API_KEY, pageSize=100)
+    params = {
+        "q": q, "language": "ko", "sortBy": "publishedAt",
+        "from": since, "apiKey": NEWS_API_KEY, "pageSize": 100
+    }
     try:
-        r = requests.get("https://newsapi.org/v2/everything", params=params, timeout=10)
+        r = requests.get("https://newsapi.org/v2/everything",
+                         params=params, timeout=10)
         r.raise_for_status()
         arts = r.json().get("articles", [])
         for a in arts:
@@ -160,7 +178,10 @@ def fetch_newsapi(q: str) -> List[Dict]:
 def fetch_rss(q: str) -> List[Dict]:
     out, seen = [], set()
     for term in re.split(r"\s+OR\s+", q):
-        url = f"https://news.google.com/rss/search?q={requests.utils.quote(term)}&hl=ko&gl=KR&ceid=KR:ko"
+        url = (
+            "https://news.google.com/rss/search?"
+            f"q={requests.utils.quote(term)}&hl=ko&gl=KR&ceid=KR:ko"
+        )
         try:
             r = requests.get(url, timeout=10); r.raise_for_status()
             feed = rss_parse(r.text)
@@ -168,9 +189,11 @@ def fetch_rss(q: str) -> List[Dict]:
                 if e.link in seen:
                     continue
                 seen.add(e.link)
-                content = BeautifulSoup(e.get("summary", ""), "html.parser").get_text()
-                dt = (time.strftime("%Y-%m-%d %H:%M", e.published_parsed)
-                      if hasattr(e, "published_parsed") else e.get("published", ""))
+                content = BeautifulSoup(e.get("summary",""), "html.parser").get_text()
+                dt = (
+                    time.strftime("%Y-%m-%d %H:%M", e.published_parsed)
+                    if hasattr(e, "published_parsed") else e.get("published","")
+                )
                 out.append({
                     "title": e.title, "url": e.link,
                     "publishedAt": dt, "content": content,
@@ -184,14 +207,18 @@ def fetch_rss(q: str) -> List[Dict]:
 def fetch_naver(q: str) -> List[Dict]:
     out = []
     try:
-        url = f"https://search.naver.com/search.naver?where=news&query={requests.utils.quote(q)}&sort=1"
+        url = (
+            "https://search.naver.com/search.naver?"
+            f"where=news&query={requests.utils.quote(q)}&sort=1"
+        )
         r = requests.get(url, headers={"User-Agent":"Mozilla/5.0"}, timeout=10)
         r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
         items = soup.select("li.bx") + soup.select("div.news_area")
         for it in items:
             a_tag = it.select_one("a.news_tit")
-            if not a_tag: continue
+            if not a_tag:
+                continue
             title = a_tag.get("title") or a_tag.get_text(strip=True)
             link  = a_tag["href"]
             dt_tag = it.select_one("span.date") or it.select_one("span.info")
@@ -214,28 +241,38 @@ def fetch_naver(q: str) -> List[Dict]:
 def update_cache(arts: List[Dict]) -> None:
     cache = {}
     if CACHE_FILE.exists():
-        try: cache = json.loads(CACHE_FILE.read_text("utf-8"))
-        except: pass
+        try:
+            cache = json.loads(CACHE_FILE.read_text("utf-8"))
+        except:
+            pass
     changed = False
     for a in arts:
         url = a.get("url","")
         if not url: continue
         uid = hashlib.sha256(url.encode()).hexdigest()
         if uid not in cache:
-            cache[uid] = a; changed = True
+            cache[uid] = a
+            changed = True
     if changed:
         CACHE_FILE.write_text(json.dumps(cache, ensure_ascii=False, indent=2),"utf-8")
 
 def fetch_all(q: str, mode: str, use_nv: bool) -> List[Dict]:
     arts = []
-    if mode!="RSS만":   arts += fetch_newsapi(q)
-    if mode!="NewsAPI만": arts += fetch_rss(q)
-    if use_nv:        arts += fetch_naver(q)
+    if mode != "RSS만":
+        arts += fetch_newsapi(q)
+    if mode != "NewsAPI만":
+        arts += fetch_rss(q)
+    if use_nv:
+        arts += fetch_naver(q)
     update_cache(arts)
     return arts
 
-def analyze_trends(arts: List[Dict], kw_map: Dict[str,List[str]],
-                   start: date, end: date) -> pd.DataFrame:
+def analyze_trends(
+    arts: List[Dict],
+    kw_map: Dict[str,List[str]],
+    start: date,
+    end: date
+) -> pd.DataFrame:
     dates = pd.date_range(start, end)
     cmap = {d.strftime("%Y-%m-%d"):{c:0 for c in kw_map} for d in dates}
     for it in arts:
@@ -251,8 +288,8 @@ def analyze_trends(arts: List[Dict], kw_map: Dict[str,List[str]],
     for d,counts in cmap.items():
         for comp,c in counts.items():
             rows.append({"date":d,"company":comp,"count":c})
-    df=pd.DataFrame(rows)
-    df["date_fmt"]=pd.to_datetime(df["date"]).dt.strftime("%m-%d")
+    df = pd.DataFrame(rows)
+    df["date_fmt"] = pd.to_datetime(df["date"]).dt.strftime("%m-%d")
     return df
 
 # ------------------------------------------------------
@@ -261,16 +298,20 @@ def analyze_trends(arts: List[Dict], kw_map: Dict[str,List[str]],
 def main():
     # 사이드바
     st.sidebar.header("🔎 필터 설정")
-    mode = st.sidebar.selectbox("뉴스 소스",
-        ["전체 (네이버 포함)","전체 (네이버 제외)","RSS만","NewsAPI만"], index=0)
+    mode = st.sidebar.selectbox(
+        "뉴스 소스",
+        ["전체 (네이버 포함)","전체 (네이버 제외)","RSS만","NewsAPI만"],
+        index=0
+    )
     use_nv = "포함" in mode
     cnt = st.sidebar.slider("기사 표시 건수",5,20,10,step=5)
 
     today = date.today()
     default_start = today - timedelta(days=30)
-    start_date, end_date = st.sidebar.date_input("분석 기간",
-                                                 [default_start,today])
-    if start_date>end_date:
+    start_date, end_date = st.sidebar.date_input(
+        "분석 기간",[default_start,today]
+    )
+    if start_date > end_date:
         st.sidebar.error("시작일은 종료일 이전이어야 합니다.")
     st.sidebar.markdown("---")
     comp1 = st.sidebar.text_input("회사1 (동적)","한라IMS")
@@ -284,12 +325,14 @@ def main():
     # 타이틀 & 메트릭
     st.title("에스엔시스 뉴스 보드")
     cols = st.columns(len(FIXED_QUERIES)+2)
-    data_map={}
+    data_map = {}
     for i,comp in enumerate(list(FIXED_QUERIES)+[comp1,comp2]):
-        arts=[a for a in fetch_all(FIXED_QUERIES.get(comp,comp),mode,use_nv)
-              if (dt:=parse_datetime(a.get("publishedAt","")))
-                 and start_date<=dt.date()<=end_date]
-        data_map[comp]=arts
+        arts = [
+            a for a in fetch_all(FIXED_QUERIES.get(comp,comp),mode,use_nv)
+            if (dt:=parse_datetime(a.get("publishedAt","")))
+               and start_date<=dt.date()<=end_date
+        ]
+        data_map[comp] = arts
         cols[i].metric(f"{comp} 기사 수", len(arts))
 
     st.markdown("---")
@@ -320,7 +363,7 @@ def main():
     # 2) 제품별 최신 뉴스
     st.subheader("제품별 최신 뉴스")
     p_tabs = st.tabs([t for t,_ in PRODUCT_QUERIES])
-    for tab,(title, syns) in zip(p_tabs, PRODUCT_QUERIES):
+    for tab,(title,syns) in zip(p_tabs, PRODUCT_QUERIES):
         with tab:
             st.subheader(f"{title} 최신 뉴스 (상위 {cnt}건)")
             q = " OR ".join(syns)
@@ -342,17 +385,17 @@ def main():
 
     st.markdown("---")
 
-    # 3) 기업별 키워드 (TF–IDF 전용)
+    # 3) 기업별 주요 키워드 분석
     with st.expander("🔑 주요 키워드 분석 (상위 5개)", expanded=True):
         kcols = st.columns(len(data_map))
-        for col, comp in zip(kcols, data_map):
+        for col,comp in zip(kcols,data_map):
             texts = [a["title"]+" "+a.get("content","") for a in data_map[comp][:cnt]]
             kws = extract_top_keywords(texts, top_n=5)
             col.markdown(f"**{comp}**")
             for w in kws:
                 col.write(f"- {w}")
 
-    # 4) 제품별 키워드 (TF–IDF 전용)
+    # 4) 제품별 주요 키워드 분석
     with st.expander("🔑 제품별 주요 키워드 분석 (상위 5개)", expanded=False):
         pcols = st.columns(len(PRODUCT_QUERIES))
         for col,(title,syns) in zip(pcols, PRODUCT_QUERIES):
