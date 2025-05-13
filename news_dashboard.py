@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-📗 에스엔시스 뉴스 대시보드 (모던 UI/UX)
+에스엔시스 뉴스 대시보드 (모던 UI/UX)
 
 * 제목+내용 기반 전처리 키워드 강화: TF–IDF + 빈도 백업
 * 네이버 스크랩(li.bx + div.news_area) + RSS/NewsAPI 지원
@@ -280,7 +280,7 @@ def main():
     if st.sidebar.button("🔄 새로고침"): st.cache_data.clear()
 
     # 상단 제목 & Metrics
-    st.title("📗 에스엔시스 뉴스 보드")
+    st.title("에스엔시스 뉴스 보드")
     metrics_cols = st.columns(len(FIXED_QUERIES) + 2)
     all_data: Dict[str, List[Dict]] = {}
     for idx, comp in enumerate(list(FIXED_QUERIES) + [comp1, comp2]):
@@ -294,7 +294,7 @@ def main():
     tabs = st.tabs(list(all_data.keys()))
     for tab, comp in zip(tabs, all_data):
         with tab:
-            st.subheader(f"📰 {comp} 최신 뉴스 (상위 {cnt}건)")
+            st.subheader(f" {comp} 최신 뉴스 (상위 {cnt}건)")
             subset = sorted(all_data[comp], key=lambda x: parse_datetime(x["publishedAt"]) or datetime.min, reverse=True)[:cnt]
             if not subset:
                 st.info("현재 조회할 기사가 없습니다.")
@@ -321,7 +321,7 @@ def main():
 
     st.markdown("---")
     # 노출 추이 차트
-    st.subheader("📈 노출 추이 분석")
+    st.subheader("노출 추이 분석")
     df_trend = analyze_trends(sum(all_data.values(), []), {**FIXED_KEYWORDS, comp1: [comp1], comp2: [comp2]}, start_date, end_date)
     df_trend = df_trend[df_trend['company'].isin(selected)]
     chart = alt.Chart(df_trend).mark_line(point=True).encode(
