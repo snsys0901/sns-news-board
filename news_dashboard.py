@@ -102,7 +102,6 @@ NOISE_WORDS = {
 def _shorten(t: str, w: int = 60) -> str:
     return t if len(t) <= w else t[:w] + "…"
 
-
 def parse_datetime(s: str) -> Optional[datetime]:
     if not s:
         return None
@@ -122,12 +121,10 @@ def parse_datetime(s: str) -> Optional[datetime]:
             continue
     return None
 
-
 def clean_text(t: str) -> str:
     t = re.sub(r"http\S+", "", t)
     t = re.sub(r"[^가-힣A-Za-z0-9\s]", " ", t)
     return re.sub(r"\s+", " ", t).strip()
-
 
 def _tfidf(texts: List[str], stop: set, top_n: int) -> List[str]:
     vect = TfidfVectorizer(
@@ -151,7 +148,6 @@ def _tfidf(texts: List[str], stop: set, top_n: int) -> List[str]:
             break
     return cand
 
-
 def _freq_fallback(texts: List[str], stop: set, top_n: int) -> List[str]:
     freq = Counter()
     for line in texts:
@@ -159,7 +155,6 @@ def _freq_fallback(texts: List[str], stop: set, top_n: int) -> List[str]:
             if tok.lower() not in stop and not tok.isdigit():
                 freq[tok] += 1
     return [w for w, _ in freq.most_common(top_n)]
-
 
 def extract_top_keywords(
     docs: List[str],
@@ -179,10 +174,8 @@ def extract_top_keywords(
                 kws.append(w)
             if len(kws) >= top_n:
                 break
-    # 제품명·회사명과 동일한 토큰 제외, 최대 top_n
     kws = [k for k in kws if k.lower() != fallback_word.lower()][:top_n]
     return kws or [fallback_word]
-
 
 def dedup(lst: List[Dict]) -> List[Dict]:
     seen, uniq = set(), []
@@ -192,7 +185,6 @@ def dedup(lst: List[Dict]) -> List[Dict]:
             uniq.append(a)
             seen.add(url)
     return uniq
-
 
 # ── 기사 수집 함수 ────────────────────────────────────
 @st.cache_data(ttl=3600)
@@ -225,7 +217,6 @@ def fetch_newsapi(q: str) -> List[Dict]:
         arts = []
     return arts
 
-
 @st.cache_data(ttl=3600)
 def fetch_rss(q: str) -> List[Dict]:
     out, seen = [], set()
@@ -255,7 +246,6 @@ def fetch_rss(q: str) -> List[Dict]:
         except Exception:
             logger.warning(f"RSS 오류: {url}")
     return out
-
 
 @st.cache_data(ttl=3600)
 def fetch_naver(q: str) -> List[Dict]:
@@ -287,7 +277,6 @@ def fetch_naver(q: str) -> List[Dict]:
         })
     return out
 
-
 # ── fetch_all & 캐시 ───────────────────────────────────
 def fetch_all(q: str, mode: str, use_nv: bool) -> List[Dict]:
     funcs = []
@@ -304,7 +293,6 @@ def fetch_all(q: str, mode: str, use_nv: bool) -> List[Dict]:
     arts = dedup(arts)
     update_cache(arts)
     return arts
-
 
 def update_cache(arts: List[Dict]) -> None:
     cache: Dict[str, Dict] = {}
@@ -330,7 +318,6 @@ def update_cache(arts: List[Dict]) -> None:
             changed = True
     if changed:
         CACHE_FILE.write_text(json.dumps(cache, ensure_ascii=False, indent=2), "utf-8")
-
 
 # ── 추이 분석 ───────────────────────────────────────────
 def analyze_trends(
@@ -358,10 +345,14 @@ def analyze_trends(
     df["date_fmt"] = pd.to_datetime(df["date"]).dt.strftime("%m-%d")
     return df
 
-
 # ── Streamlit 메인 ─────────────────────────────────────
 def main() -> None:
     # ── Sidebar 설정 ──────────────────────────────────
+    # 1) 새로고침 버튼을 필터 설정 바로 위로 이동
+    if st.sidebar.button("🔄 새로고침"):
+        st.cache_data.clear()
+
+    # 2) 필터 설정 헤더 및 위젯
     st.sidebar.header("필터 설정")
     mode = st.sidebar.selectbox(
         "뉴스 소스",
@@ -386,8 +377,6 @@ def main() -> None:
 
     prod1_name = st.sidebar.text_input("제품1 (동적)", "배전반")
     prod2_name = st.sidebar.text_input("제품2 (동적)", "친환경")
-    if st.sidebar.button("🔄 새로고침"):
-        st.cache_data.clear()
 
     # ── 제품 쿼리 구성 ─────────────────────────────────
     def synonyms(name: str) -> List[str]:
@@ -533,7 +522,6 @@ def main() -> None:
         .interactive()
     )
     st.altair_chart(chart, use_container_width=True)
-
 
 if __name__ == "__main__":
     main()
