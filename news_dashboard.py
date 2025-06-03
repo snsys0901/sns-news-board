@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-에스엔시스 뉴스 대시보드  (v2.6, 2025-05-27)
+에스엔시스 뉴스 대시보드  (v2.6.1, 2025-06-03)
 ────────────────────────────────────────────────────────
 • BWMS / IAS / FGSS + 동적 2종(제품1·제품2) = 5개 제품 모니터링
 • 키워드 추출 보강 → 항상 최대 5개, 제목 동일 토큰 제외
 • 그래프 .interactive() 적용(휠 줌·드래그 팬 가능)
 • 사이드바 라벨 명확화 (제품1 / 제품2)
+• v2.6.1: 캐시 파일 손상 복구 + 원자적 저장(UnicodeDecodeError 방지)
 """
 
 # ── 공통 import / 경고 억제 ──────────────────────────────
@@ -16,6 +17,7 @@ import re
 import json
 import time
 import hashlib
+import tempfile         # ★ NEW
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from collections import Counter
@@ -294,13 +296,20 @@ def fetch_all(q: str, mode: str, use_nv: bool) -> List[Dict]:
     update_cache(arts)
     return arts
 
+# ── ★ NEW: 캐시 손상 복구 + 원자적 저장 ────────────────
 def update_cache(arts: List[Dict]) -> None:
     cache: Dict[str, Dict] = {}
+
+    # 1) 캐시 읽기 (손상·인코딩 오류 모두 처리)
     if CACHE_FILE.exists():
         try:
-            cache = json.loads(CACHE_FILE.read_text("utf-8"))
-        except json.JSONDecodeError:
-            pass
+            cache = json.loads(CACHE_FILE.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            logger.warning("⚠️ 캐시 파일 손상: %s — 새로 생성합니다.", e)
+            CACHE_FILE.unlink(missing_ok=True)   # 깨진 파일 삭제
+            cache = {}
+
+    # 2) 새 기사 병합
     changed = False
     for a in arts:
         url = a.get("url", "")
@@ -310,16 +319,26 @@ def update_cache(arts: List[Dict]) -> None:
         if uid not in cache:
             cache[uid] = a
             changed = True
+
+    # 3) 오래된 캐시(30일+) 삭제
     purge_before = datetime.now(ZoneInfo("Asia/Seoul")) - timedelta(days=30)
     for uid, a in list(cache.items()):
         dt = parse_datetime(a.get("publishedAt", ""))
         if dt and dt < purge_before:
             del cache[uid]
             changed = True
-    if changed:
-        CACHE_FILE.write_text(json.dumps(cache, ensure_ascii=False, indent=2), "utf-8")
 
-# ── 추이 분석 ───────────────────────────────────────────
+    # 4) 변경 시 임시파일 → 원본으로 원자적 저장
+    if changed:
+        with tempfile.NamedTemporaryFile(
+            "w", delete=False, dir=CACHE_FILE.parent, encoding="utf-8"
+        ) as tmp:
+            json.dump(cache, tmp, ensure_ascii=False, indent=2)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        Path(tmp.name).replace(CACHE_FILE)   # atomic rename
+
+# ── 추이 분석 ─────────────────────────────────────────
 def analyze_trends(
     arts: List[Dict], kw_map: Dict[str, List[str]], start: date, end: date
 ) -> pd.DataFrame:
